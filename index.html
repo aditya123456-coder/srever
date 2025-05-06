@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Drive Image Uploader</title>
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script src="https://accounts.google.com/gsi/client"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      margin-top: 30px;
+    }
+    #dropzone {
+      width: 400px;
+      height: 200px;
+      border: 2px dashed #ccc;
+      line-height: 200px;
+      text-align: center;
+      margin: 0 auto;
+      font-size: 18px;
+      color: #777;
+    }
+    #links {
+      margin-top: 30px;
+    }
+    img {
+      max-width: 90%;
+      margin-top: 15px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+    #signin {
+      margin: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Drag & Drop Image to Upload to Google Drive</h2>
+  <button id="signin" style="display:none;">🔐 Sign In</button>
+  <div id="dropzone">Drop your image here</div>
+  <div id="links"></div>
+
+  <script>
+    const CLIENT_ID = "854274711633-jl4jsg8g8904jfcuvndfrncvughii8km.apps.googleusercontent.com";
+    const FOLDER_ID = "1OGMnhhyg17TV3J4_5M4ciPrLtqFVXTzc";
+    const SCOPES = "https://www.googleapis.com/auth/drive.file";
+
+    let tokenClient;
+    let gapiInited = false;
+
+    function gapiInit() {
+      gapi.load('client', () => {
+        gapi.client.init({})
+          .then(() => {
+            tokenClient = google.accounts.oauth2.initTokenClient({
+              client_id: CLIENT_ID,
+              scope: SCOPES,
+              callback: (tokenResponse) => {
+                gapi.client.setToken(tokenResponse);
+                document.getElementById("signin").style.display = "none";
+              },
+            });
+            gapiInited = true;
+            document.getElementById("signin").style.display = "inline-block";
+          })
+          .catch(err => console.error('GAPI init error:', err));
+      });
+    }
+
+    function requestAccessToken() {
+      if (tokenClient) {
+        tokenClient.requestAccessToken();
+      }
+    }
+
+    async function ensureAuth() {
+      if (!gapi.client.getToken()) {
+        return new Promise((resolve, reject) => {
+          if (!tokenClient) return reject('Token client not initialized');
+          
+          tokenClient.callback = (resp) => {
+            if (resp.error) {
+              reject(resp.error);
+              return;
+            }
+            gapi.client.setToken(resp);
+            resolve();
+          };
+          
+          tokenClient.requestAccessToken();
+        });
+      }
+      return Promise.resolve();
+    }
+
+    async function uploadFile(file) {
+      try {
+        await ensureAuth();
+        const accessToken = gapi.client.getToken().access_token;
+
+        const metadata = {
+          name: file.name,
+          mimeType: file.type,
+          parents: [FOLDER_ID],
+        };
+
+        const form = new FormData();
+        form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+        form.append("file", file);
+
+        const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + accessToken },
+          body: form,
+        });
+
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        const fileData = await res.json();
+        const fileId = fileData.id;
+
+        // Make public
+        const permissionRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + accessToken,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ role: "reader", type: "anyone" }),
+        });
+
+        if (!permissionRes.ok) throw new Error('Failed to set permissions');
+
+        const imageUrl = `https://drive.google.com/uc?export=view&id=${fileId}`;
+        const link = `https://drive.google.com/file/d/${fileId}/view`;
+
+        const container = document.getElementById("links");
+        const img = document.createElement("img");
+        img.src = imageUrl;
+
+        const a = document.createElement("a");
+        a.href = link;
+        a.target = "_blank";
+        a.innerText = "🔗 View in Drive";
+
+        container.appendChild(img);
+        container.appendChild(document.createElement("br"));
+        container.appendChild(a);
+        container.appendChild(document.createElement("hr"));
+      } catch (err) {
+        console.error("Upload failed:", err);
+        alert("Upload failed: " + err.message);
+      }
+    }
+
+    // Drag and drop handlers
+    const dropzone = document.getElementById("dropzone");
+    
+    dropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropzone.style.borderColor = "green";
+    });
+
+    dropzone.addEventListener("dragleave", () => {
+      dropzone.style.borderColor = "#ccc";
+    });
+
+    dropzone.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      dropzone.style.borderColor = "#ccc";
+      const files = e.dataTransfer.files;
+      for (let file of files) {
+        if (file.type.startsWith('image/')) {
+          await uploadFile(file);
+        } else {
+          alert('Only image files are allowed');
+        }
+      }
+    });
+
+    window.onload = gapiInit;
+    document.getElementById("signin").onclick = requestAccessToken;
+  </script>
+</body>
+</html>
